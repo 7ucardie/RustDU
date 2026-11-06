@@ -1,4 +1,35 @@
-# RustDU
+<p align="center"><img src="assets/disk-explorer.png" width="160" alt="Disk Explorer logo"></p>
+
+<h1 align="center">RustDU</h1>
+
+<p align="center">
+  <a href="https://github.com/7ucardie/RustDU/actions/workflows/ci.yml">
+    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/7ucardie/RustDU/ci.yml?branch=main&label=CI&style=for-the-badge">
+  </a>
+  <a href="https://github.com/7ucardie/RustDU/releases">
+    <img alt="Version" src="https://img.shields.io/github/v/release/7ucardie/RustDU?color=673AB7&label=version&style=for-the-badge">
+  </a>
+  <a href="LICENSE">
+    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-009688.svg?style=for-the-badge">
+  </a>
+</p>
+<p align="center">
+  <a href="https://github.com/7ucardie/RustDU/issues">
+    <img alt="GitHub Issues" src="https://img.shields.io/github/issues/7ucardie/RustDU?color=F44336&style=for-the-badge">
+  </a>
+  <a href="https://github.com/7ucardie/RustDU/stargazers">
+    <img alt="GitHub Stars" src="https://img.shields.io/github/stars/7ucardie/RustDU?color=FFEB3B&style=for-the-badge">
+  </a>
+  <a href="https://github.com/7ucardie/RustDU/network">
+    <img alt="GitHub Forks" src="https://img.shields.io/github/forks/7ucardie/RustDU?color=2196F3&style=for-the-badge">
+  </a>
+</p>
+<p align="center">
+  <img alt="Rust edition 2024" src="https://img.shields.io/badge/Rust-edition%202024-DEA584.svg?logo=rust&logoColor=white&style=for-the-badge">
+  <img alt="egui 0.37" src="https://img.shields.io/badge/egui-0.37-FF5722.svg?style=for-the-badge">
+  <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0078D6.svg?style=for-the-badge">
+  <img alt="macOS arm64 and x64" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-000000.svg?logo=apple&logoColor=white&style=for-the-badge">
+</p>
 
 See where the disk space goes. Scan a folder and get an explorer view of its subfolders with sizes,
 permissions, owners, git state and last activity. Rust and egui, for macOS and Windows (Linux builds).
