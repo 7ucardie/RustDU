@@ -67,3 +67,22 @@ jobs:
           name: rustdu-macos-arm64
           path: target/rustdu-macos.tar.gz
           if-no-files-found: error
+
+  # Pin scanner images by digest so their tags cannot change what CI runs.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Scan all commits, not only the PR's.
+          persist-credentials: false
+      - name: gitleaks
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git --redact --no-banner /repo
+      - name: trivy
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+          fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 /repo
