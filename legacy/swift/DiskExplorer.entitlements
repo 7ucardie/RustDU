@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- No App Sandbox on purpose: a disk usage tool needs to read arbitrary folders.
+         Protected locations (Mail, Photos, other users) additionally need Full Disk Access,
+         which the user grants in System Settings › Privacy & Security. -->
+</dict>
+</plist>

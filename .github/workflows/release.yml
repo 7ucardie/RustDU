@@ -1,0 +1,162 @@
+name: Release
+
+# Push a tag like v0.1.0 to publish binaries for Windows and macOS (macOS signed and notarized).
+# A tag with a hyphen (v0.1.0-rc.1) makes a pre-release.
+# Secrets: MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_TEAM_ID, NOTARY_KEY_P8, NOTARY_KEY_ID, NOTARY_ISSUER_ID.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  create:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: |
+          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --draft $pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    needs: create
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            arch: arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            arch: amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "rustdu-$($env:GITHUB_REF_NAME.TrimStart('v'))-windows-${{ matrix.arch }}"
+          Compress-Archive -Path target/${{ matrix.target }}/release/rustdu.exe, README.md, LICENSE -DestinationPath "$name.zip"
+          Copy-Item target/${{ matrix.target }}/release/rustdu.exe "$name.exe"
+          ./packaging/windows-installer.ps1 target/${{ matrix.target }}/release/rustdu.exe $env:GITHUB_REF_NAME.TrimStart('v') .
+      - name: Sign (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # A throwaway keychain holding only the certificate, so codesign never prompts.
+          kc="$RUNNER_TEMP/signing.keychain-db"; kc_pw="$(uuidgen)"
+          security create-keychain -p "$kc_pw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kc_pw" "$kc"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 -c -
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$kc"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$kc"
+
+          mkdir out
+          SIGN_IDENTITY="Developer ID Application" \
+            sh packaging/macos-app.sh target/${{ matrix.target }}/release/rustdu "${GITHUB_REF_NAME#v}" out
+          codesign --verify --strict --verbose=2 "out/RustDU.app"
+          info="$(codesign -dv "out/RustDU.app" 2>&1)"
+          [ -n "$APPLE_TEAM_ID" ] || { echo "APPLE_TEAM_ID secret is empty"; exit 1; }
+          grep -qx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
+      - name: Notarize (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 330
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          trap 'rm -f "$RUNNER_TEMP/notary.p8"' EXIT
+          auth=(--key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+          ditto -c -k --keepParent "out/RustDU.app" "$RUNNER_TEMP/DiskExplorer.zip"
+          id="$(xcrun notarytool submit "$RUNNER_TEMP/DiskExplorer.zip" "${auth[@]}" --output-format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          echo "Notarization submission: $id"
+          xcrun notarytool wait "$id" "${auth[@]}" --timeout 5h || true # the status check below decides
+          status="$(xcrun notarytool info "$id" "${auth[@]}" --output-format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+          echo "Notarization status: $status"
+          if [ "$status" != "Accepted" ]; then
+            [ "$status" = "In Progress" ] || xcrun notarytool log "$id" "${auth[@]}"
+            exit 1
+          fi
+      - name: Staple and pack (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          xcrun stapler staple "out/RustDU.app"
+          spctl --assess --type execute --verbose=2 "out/RustDU.app"
+          tar -czf "rustdu-${GITHUB_REF_NAME#v}-darwin-${{ matrix.arch }}.tar.gz" -C out "RustDU.app"
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+      - run: gh release upload "$GITHUB_REF_NAME" rustdu-* --repo "$GITHUB_REPOSITORY" --clobber
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: SHA256SUMS for every release file
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'rustdu-*' --dir assets
+          cd assets && sha256sum rustdu-* > SHA256SUMS && cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*
+
+  publish:
+    needs: checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+        env:
+          GH_TOKEN: ${{ github.token }}
