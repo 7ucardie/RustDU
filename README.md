@@ -12,6 +12,9 @@
   <a href="LICENSE">
     <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-009688.svg?style=for-the-badge">
   </a>
+  <a href="docs/README.md">
+    <img alt="Documentation: Diátaxis" src="https://img.shields.io/badge/docs-Di%C3%A1taxis-009485?logo=readthedocs&logoColor=white&style=for-the-badge">
+  </a>
 </p>
 <p align="center">
   <a href="https://github.com/7ucardie/RustDU/issues">
@@ -95,6 +98,8 @@ read from `.git/HEAD` and the dirty state is unknown.
 cargo run --release -- ~/some/folder     # scan a folder at once
 cargo run --release                      # open and choose a folder
 ```
+
+The [documentation](docs/README.md) follows [Diátaxis](https://diataxis.fr/).
 
 Checks, as CI runs them on Windows, macOS and Linux:
 
