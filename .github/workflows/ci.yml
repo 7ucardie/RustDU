@@ -46,7 +46,7 @@ jobs:
           ./packaging/windows-installer.ps1 target/release/rustdu.exe $v target/installer
       - name: Save Windows artifacts
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rustdu-windows-amd64
           path: |
@@ -62,7 +62,7 @@ jobs:
           tar -czf target/rustdu-macos.tar.gz -C target/app RustDU.app
       - name: Save macOS artifact
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rustdu-macos-arm64
           path: target/rustdu-macos.tar.gz
