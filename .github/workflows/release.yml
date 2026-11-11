@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
@@ -21,6 +25,16 @@ jobs:
       contents: write
     steps:
       - run: |
+          set -euo pipefail
+          releases="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | [.tag_name, .draft] | @tsv')"
+          existing="$(printf '%s\n' "$releases" | awk -F '\t' -v tag="$GITHUB_REF_NAME" '$1 == tag { print $2 }')"
+          if [ "$existing" = true ]; then
+            echo "Resuming existing draft release for $GITHUB_REF_NAME"
+            exit 0
+          elif [ -n "$existing" ]; then
+            echo "::error::Release $GITHUB_REF_NAME is already published; refusing to overwrite its assets."
+            exit 1
+          fi
           pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --draft $pre
         env:
@@ -31,6 +45,7 @@ jobs:
     permissions:
       contents: write
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -44,6 +59,24 @@ jobs:
             arch: amd64
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Check macOS release secrets
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          missing=0
+          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD APPLE_TEAM_ID NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required release secret: $name"
+              missing=1
+            fi
+          done
+          exit "$missing"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -127,7 +160,13 @@ jobs:
         if: always() && runner.os == 'macOS'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
-      - run: gh release upload "$GITHUB_REF_NAME" rustdu-* --repo "$GITHUB_REPOSITORY" --clobber
+      - run: |
+          set -euo pipefail
+          [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ] || {
+            echo "::error::Release is already published; refusing to replace its assets."
+            exit 1
+          }
+          gh release upload "$GITHUB_REF_NAME" rustdu-* --repo "$GITHUB_REPOSITORY" --clobber
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,6 +181,11 @@ jobs:
     steps:
       - name: SHA256SUMS for every release file
         run: |
+          set -euo pipefail
+          [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ] || {
+            echo "::error::Release is already published; refusing to replace its checksums."
+            exit 1
+          }
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'rustdu-*' --dir assets
           cd assets && sha256sum rustdu-* > SHA256SUMS && cat SHA256SUMS
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
