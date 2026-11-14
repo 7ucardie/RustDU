@@ -1,19 +1,19 @@
 name: Version
 
-# Releases what lands on main without anyone picking a number: once CI passes there, the next version is
-# worked out from the Conventional Commits since the last tag (packaging/next-version.sh), written to
-# Cargo.toml and Cargo.lock, committed, tagged, and handed to the Release workflow.
-# Commits that are only docs, ci, chore, build, test or refactor release nothing; run this workflow by hand
-# with a bump to release them anyway.
+# Keeps a release pull request ready and releases when it is merged. On every push to main:
+# - if the version in Cargo.toml has no tag yet (the release pull request was just merged), tag it and
+#   start the Release workflow;
+# - otherwise work out the next version from the Conventional Commits since the last tag
+#   (packaging/next-version.sh) and open or refresh the pull request that bumps to it.
+# Commits that are only docs, ci, chore, build, test or refactor ask for no release; run this workflow by
+# hand with a bump to get a release pull request anyway.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
       bump:
-        description: Smallest bump to make (auto follows the commits and may release nothing)
+        description: Smallest bump to make (auto follows the commits and may propose nothing)
         type: choice
         options: [auto, patch, minor, major]
         default: auto
@@ -26,54 +26,80 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bump:
-    # Only CI runs for a push to this repository's main count: a fork's branch can be called main too.
-    if: >-
-      github.event_name == 'workflow_dispatch' || (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_repository.full_name == github.repository
-      )
+  version:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # the version commit and tag
-      actions: write # starting the Release workflow
+      contents: write # the tag and the release branch
+      pull-requests: write # the release pull request
+      actions: write # starting Release, and CI on the release branch
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: release/next
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0 # the commits since the last tag decide the version
           persist-credentials: false
-      - name: Bump, tag and start the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUMP: ${{ inputs.bump }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+      - name: Git identity and credentials for this job
         run: |
           set -euo pipefail
-          if [ -n "$TESTED_SHA" ] && [ "$(git rev-parse HEAD)" != "$TESTED_SHA" ]; then
-            echo "main moved on since this CI run; the run for the newer commit releases it."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git config "http.https://github.com/.extraheader" "AUTHORIZATION: basic $auth"
+      - name: Tag a merged release
+        id: tag
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already tagged."
             exit 0
           fi
+          git tag "v$version"
+          git push origin "v$version"
+          # A tag pushed with the workflow token starts no workflow, so the release is started explicitly.
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "v$version"
+          echo "Tagged v$version and started the release." >> "$GITHUB_STEP_SUMMARY"
+          echo "released=true" >> "$GITHUB_OUTPUT"
+      - name: Open or refresh the release pull request
+        if: steps.tag.outputs.released != 'true'
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
           case "$BUMP" in patch | minor | major) ;; *) BUMP="" ;; esac
           version="$(sh packaging/next-version.sh $BUMP)"
           if [ -z "$version" ]; then
             echo "Nothing to release: no feat, fix or breaking commit since the last tag."
             exit 0
           fi
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "::error::Tag v$version already exists."
-            exit 1
-          fi
+          last="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null || true)"
+          {
+            echo "Merging this releases **v$version**: the merge is tagged and the Release workflow builds,"
+            echo "signs and publishes the artifacts. This pull request is rebuilt whenever main changes."
+            echo
+            echo "### Changes since ${last:-the start}"
+            echo
+            git log --no-merges --format='- %s (%h)' ${last:+"$last..HEAD"}
+          } > "$RUNNER_TEMP/body.md"
+
+          # Rebuilt from main each time, so it never conflicts and holds nothing but the bump.
+          git checkout -B "$BRANCH"
           sh packaging/set-version.sh "$version"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "chore: release $version"
-          git tag "v$version"
-          # Both or neither: a tag without its commit on main, or the reverse, would need cleaning up by hand.
-          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
-            push --atomic origin HEAD:main "v$version"
-          # A tag pushed with the workflow token starts no workflow, so the release is started explicitly.
-          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "v$version"
-          echo "Released v$version" >> "$GITHUB_STEP_SUMMARY"
+          git push --force origin "$BRANCH"
+
+          title="chore: release $version"
+          number="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
+          # A pull request opened with the workflow token starts no workflow either: run CI on its commit,
+          # which shows up in the pull request's checks.
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "Release pull request for v$version is up to date." >> "$GITHUB_STEP_SUMMARY"

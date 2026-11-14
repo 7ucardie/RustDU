@@ -9,8 +9,9 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-Releases are automatic. Write commit subjects as [Conventional Commits](https://www.conventionalcommits.org/):
-when CI passes on `main`, the Version workflow reads the commits since the last tag and picks the bump.
+To release, merge the release pull request. Write commit subjects as
+[Conventional Commits](https://www.conventionalcommits.org/): on every push to `main` the Version workflow
+reads the commits since the last tag and picks the bump.
 
 | Commits since the last tag | Next version |
 | --- | --- |
@@ -19,13 +20,21 @@ when CI passes on `main`, the Version workflow reads the commits since the last 
 | `feat!: …` or a `BREAKING CHANGE:` footer | major, or minor while the version is 0.x |
 | only `docs`, `ci`, `chore`, `build`, `test`, `refactor` | no release |
 
-It then writes the version to `Cargo.toml` and `Cargo.lock`, commits `chore: release <version>` to `main`,
-tags `v<version>` and starts the Release workflow, which names every artifact after the tag. To release
-when the commits ask for none (dependency updates, for example), run **Version** from the Actions tab and
-choose a bump. `sh packaging/next-version.sh` prints what the next version would be.
+It opens a pull request `chore: release <version>` from the branch `release/next`, holding only the new
+version in `Cargo.toml` and `Cargo.lock` and listing the changes. The pull request is rebuilt each time
+`main` changes, so the version and the list stay current, and CI runs on it. Merge it when you want the
+release: the Version workflow sees a version without a tag, tags the merge `v<version>` and starts the
+Release workflow, which names every artifact after the tag.
 
-Do not edit the version in `Cargo.toml` by hand: the last tag is what counts. Pushing a `v<version>` tag
-yourself still starts a release, which is how to make a pre-release (`v1.0.0-rc.1`).
+To release when the commits ask for none (dependency updates, for example), run **Version** from the
+Actions tab and choose a bump. `sh packaging/next-version.sh` prints what the next version would be.
+
+The rule behind it: a version in `Cargo.toml` on `main` that has no tag gets released. Leave that line to
+the release pull request. Pushing a `v<version>` tag yourself still starts a release, which is how to make
+a pre-release (`v1.0.0-rc.1`).
+
+The repository setting **Actions › General › Allow GitHub Actions to create and approve pull requests**
+must be on, or the workflow cannot open the pull request.
 
 GitHub Actions builds Windows and macOS release artifacts for the tag. macOS signing
 and notarization require the secrets listed in [the release workflow](../../.github/workflows/release.yml).
