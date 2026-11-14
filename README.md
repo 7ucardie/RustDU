@@ -82,6 +82,15 @@ Backspace opens the Trash dialog for the selection.
 Double-click a folder to expand it and a file to reveal it. Drop a folder on the window to scan it.
 ⌘O / Ctrl+O opens a folder, ⌘R / Ctrl+R rescans, ⌘. stops.
 
+**Last scan**: a finished scan is kept in your cache folder (`~/Library/Caches/RustDU` on macOS,
+`%LOCALAPPDATA%\RustDU` on Windows, `~/.cache/rustdu` on Linux) and shown again at the next start, with its
+age in the status bar. Git details are read fresh; sizes are as they were, so Rescan to bring them up to
+date. Starting with a folder argument scans that folder instead.
+
+**Menu bar and tray**: RustDU puts an icon in the macOS menu bar and the Windows notification area.
+Closing the window hides the app and keeps the scan in memory; the icon's menu shows the window again or
+quits, and on Windows a left click on the icon shows it too. File › Quit (and ⌘Q on macOS) quit as usual.
+
 When scanning a whole volume, mount points of other volumes and pseudo filesystems (`/System/Volumes`,
 `/Volumes`, `/dev` on macOS; `/proc`, `/sys`, `/dev`, `/run` on Linux) are listed but not walked, so the
 macOS Data volume is not counted twice through its firmlinks.
@@ -96,7 +105,7 @@ read from `.git/HEAD` and the dirty state is unknown.
 
 ```sh
 cargo run --release -- ~/some/folder     # scan a folder at once
-cargo run --release                      # open and choose a folder
+cargo run --release                      # open with the last scan, or choose a folder
 ```
 
 The [documentation](docs/README.md) follows [Diátaxis](https://diataxis.fr/).
