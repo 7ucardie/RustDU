@@ -1,0 +1,40 @@
+name: Release PR checks
+
+# Started by the Version workflow on the release pull request's branch. GitHub starts no workflow for a
+# pull request opened with the workflow token, and a run started by hand is not listed among the pull
+# request's checks, so this runs CI and puts the result on the commit as a status, which is.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pr-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  report:
+    needs: ci
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report the result on the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.ci.result }}
+        run: |
+          set -euo pipefail
+          case "$RESULT" in
+            success) state=success ;;
+            cancelled | skipped) state=error ;;
+            *) state=failure ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state="$state" \
+            -f context="CI on the release pull request" -f description="CI: $RESULT" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null

@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_call: # the release runs these checks before it publishes
-  workflow_dispatch: # the Version workflow runs these on the release pull request, which it cannot trigger
+  workflow_call: # the release runs these checks before it publishes, and release-pr-ci.yml on the release pull request
 
 permissions:
   contents: read
