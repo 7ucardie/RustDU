@@ -1,11 +1,13 @@
 name: Release
 
-# Push a tag like v0.1.0 to publish binaries for Windows and macOS (macOS signed and notarized).
+# Publishes binaries for Windows and macOS (macOS signed and notarized) for a tag like v0.1.0.
+# The Version workflow tags main and starts this by itself; pushing a tag by hand works too.
 # A tag with a hyphen (v0.1.0-rc.1) makes a pre-release.
 # Secrets: MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_TEAM_ID, NOTARY_KEY_P8, NOTARY_KEY_ID, NOTARY_ISSUER_ID.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: # run it on a tag: the Version workflow does, with the tag it just made
 
 permissions:
   contents: read
@@ -16,6 +18,8 @@ concurrency:
 
 jobs:
   ci:
+    # Started by hand on a branch there is no version to release; the other jobs are skipped with this one.
+    if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/ci.yml
 
   create:
