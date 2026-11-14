@@ -135,7 +135,12 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" sh packaging/macos-
 **Windows**: `cargo build --release` gives `target\release\rustdu.exe` with the icon embedded.
 `packaging\windows-installer.ps1` builds a per-user Inno Setup installer. Sign either with `signtool`.
 
-**Release**: push a `v<version>` tag. `.github/workflows/release.yml` builds Windows and macOS (arm64 and
+**Release**: automatic. When CI passes on `main`, `.github/workflows/version.yml` picks the next version
+from the [Conventional Commits](https://www.conventionalcommits.org/) since the last tag
+(`packaging/next-version.sh`: `feat` is a minor bump, `fix` and `perf` a patch, a breaking change a major
+one, or a minor one before 1.0), writes it to `Cargo.toml` and `Cargo.lock` (`packaging/set-version.sh`),
+tags `v<version>` and starts the release. Other commit types release nothing; run the Version workflow by
+hand with a bump to release anyway. `.github/workflows/release.yml` builds Windows and macOS (arm64 and
 amd64), signs and notarizes the macOS bundles with the `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`,
 `APPLE_TEAM_ID`, `NOTARY_KEY_P8`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` secrets, and publishes a GitHub
 release with checksums and provenance attestations. A tag with a hyphen makes a pre-release.
