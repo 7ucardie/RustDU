@@ -1,7 +1,7 @@
 name: Release
 
 # Publishes binaries for Windows and macOS (macOS signed and notarized) for a tag like v0.1.0.
-# The Version workflow tags main and starts this by itself; pushing a tag by hand works too.
+# The Version workflow tags a merged release pull request and starts this; pushing a tag by hand works too.
 # A tag with a hyphen (v0.1.0-rc.1) makes a pre-release.
 # Secrets: MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_TEAM_ID, NOTARY_KEY_P8, NOTARY_KEY_ID, NOTARY_ISSUER_ID.
 on:
