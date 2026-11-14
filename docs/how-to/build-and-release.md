@@ -39,9 +39,11 @@ The repository setting **Actions › General › Allow GitHub Actions to create 
 must be on, or the workflow cannot open the pull request.
 
 GitHub Actions builds Windows and macOS release artifacts for the tag. macOS signing
-and notarization require the secrets listed in [the release workflow](../../.github/workflows/release.yml).
+and notarization use the secrets listed in [the release workflow](../../.github/workflows/release.yml).
+Without them the release still goes out: the macOS bundles are signed ad hoc, the release notes say so, and
+users allow the app once under System Settings › Privacy & Security › Open Anyway.
 The workflow creates a draft, uploads the packages and checksums, then publishes it after all jobs pass.
-Each platform builds independently. If a build fails, the release stays a draft; add any missing secrets
+Each platform builds independently. If a build fails, the release stays a draft; fix the cause
 and use **Re-run failed jobs** in the GitHub Actions run. A full rerun also resumes the existing draft.
 Published releases are protected from replacement by reruns. To change a published release, use a new tag.
 For local packaging instructions, see [Package and sign](../../README.md#package-and-sign).

@@ -3,7 +3,9 @@ name: Release
 # Publishes binaries for Windows and macOS (macOS signed and notarized) for a tag like v0.1.0.
 # The Version workflow tags a merged release pull request and starts this; pushing a tag by hand works too.
 # A tag with a hyphen (v0.1.0-rc.1) makes a pre-release.
-# Secrets: MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_TEAM_ID, NOTARY_KEY_P8, NOTARY_KEY_ID, NOTARY_ISSUER_ID.
+# Secrets: MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_TEAM_ID to sign with a Developer ID, and with those
+# NOTARY_KEY_P8, NOTARY_KEY_ID, NOTARY_ISSUER_ID to notarize. Without them the macOS bundles are still
+# released, signed ad hoc only: Gatekeeper then asks the user to allow the app in System Settings.
 on:
   push:
     tags: ["v*"]
@@ -40,9 +42,14 @@ jobs:
             exit 1
           fi
           pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --draft $pre
+          notes=""
+          if [ -z "$MACOS_CERT_P12" ]; then
+            notes="The macOS builds of this release are not signed with a Developer ID or notarized. On first start, allow RustDU under System Settings › Privacy & Security › Open Anyway."
+          fi
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --notes "$notes" --draft $pre
         env:
           GH_TOKEN: ${{ github.token }}
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
 
   build:
     needs: create
@@ -64,6 +71,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check macOS release secrets
+        id: secrets
         if: runner.os == 'macOS'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -73,14 +81,22 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
-          missing=0
-          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD APPLE_TEAM_ID NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
-            if [ -z "${!name}" ]; then
-              echo "::error::Missing required release secret: $name"
-              missing=1
-            fi
-          done
-          exit "$missing"
+          # Missing secrets do not stop the release: the bundle is then built without that step.
+          have() {
+            for name in "$@"; do
+              if [ -z "${!name}" ]; then
+                echo "::warning::Release secret $name is not set."
+                return 1
+              fi
+            done
+          }
+          sign=false; notarize=false
+          if have MACOS_CERT_P12 MACOS_CERT_PASSWORD APPLE_TEAM_ID; then sign=true; fi
+          if [ "$sign" = true ] && have NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; then notarize=true; fi
+          [ "$sign" = true ] || echo "::warning::macOS bundle will be signed ad hoc only (no Developer ID)."
+          [ "$notarize" = true ] || echo "::warning::macOS bundle will not be notarized."
+          echo "sign=$sign" >> "$GITHUB_OUTPUT"
+          echo "notarize=$notarize" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -98,8 +114,15 @@ jobs:
           Compress-Archive -Path target/${{ matrix.target }}/release/rustdu.exe, README.md, LICENSE -DestinationPath "$name.zip"
           Copy-Item target/${{ matrix.target }}/release/rustdu.exe "$name.exe"
           ./packaging/windows-installer.ps1 target/${{ matrix.target }}/release/rustdu.exe $env:GITHUB_REF_NAME.TrimStart('v') .
+      - name: Bundle without a Developer ID (macOS)
+        if: runner.os == 'macOS' && steps.secrets.outputs.sign != 'true'
+        run: |
+          set -euo pipefail
+          mkdir out
+          sh packaging/macos-app.sh target/${{ matrix.target }}/release/rustdu "${GITHUB_REF_NAME#v}" out
+          codesign --verify --strict --verbose=2 "out/RustDU.app"
       - name: Sign (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.secrets.outputs.sign == 'true'
         timeout-minutes: 10
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -130,7 +153,7 @@ jobs:
           [ -n "$APPLE_TEAM_ID" ] || { echo "APPLE_TEAM_ID secret is empty"; exit 1; }
           grep -qx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
       - name: Notarize (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.secrets.outputs.notarize == 'true'
         timeout-minutes: 330
         env:
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
@@ -153,15 +176,19 @@ jobs:
             [ "$status" = "In Progress" ] || xcrun notarytool log "$id" "${auth[@]}"
             exit 1
           fi
-      - name: Staple and pack (macOS)
-        if: runner.os == 'macOS'
+      - name: Staple (macOS)
+        if: runner.os == 'macOS' && steps.secrets.outputs.notarize == 'true'
         run: |
           set -euo pipefail
           xcrun stapler staple "out/RustDU.app"
           spctl --assess --type execute --verbose=2 "out/RustDU.app"
+      - name: Pack (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
           tar -czf "rustdu-${GITHUB_REF_NAME#v}-darwin-${{ matrix.arch }}.tar.gz" -C out "RustDU.app"
       - name: Remove the signing keychain
-        if: always() && runner.os == 'macOS'
+        if: always() && runner.os == 'macOS' && steps.secrets.outputs.sign == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
       - run: |
