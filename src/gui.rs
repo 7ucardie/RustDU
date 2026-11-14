@@ -1,6 +1,7 @@
 //! The window: volumes, explorer tree, largest files, git repos, inspector and status bar.
 
 use crate::scan::{self, GitInfo, Kind, Progress, SizeMode, Tree, Volume};
+use crate::{cache, tray};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder, TableRow};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -163,6 +164,12 @@ pub struct App {
     /// Generation of the tree, so late git results for an old scan are dropped.
     generation: u64,
     elapsed: f64,
+    /// Unix seconds when the shown tree was scanned.
+    scanned_at: i64,
+    /// The tree came from the cache of an earlier run, not from a scan in this one.
+    restored: bool,
+    restore_rx: Option<Receiver<Option<cache::Saved>>>,
+    tray: Option<tray::Tray>,
     progress_snapshot: (usize, u64, String),
     cancelled: bool,
     git_rx: Option<Receiver<(u64, u32, GitInfo)>>,
@@ -206,6 +213,10 @@ pub fn run(start: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
         scan: None,
         generation: 0,
         elapsed: 0.0,
+        scanned_at: 0,
+        restored: false,
+        restore_rx: None,
+        tray: None,
         progress_snapshot: (0, 0, String::new()),
         cancelled: false,
         git_rx: None,
@@ -250,6 +261,13 @@ pub fn run(start: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     };
     if let Some(p) = start {
         app.start_scan(p);
+    } else {
+        // A big cache takes a moment to read: the window opens meanwhile.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(cache::load());
+        });
+        app.restore_rx = Some(rx);
     }
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -265,8 +283,9 @@ pub fn run(start: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "RustDU",
         opts,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             apply_theme(&cc.egui_ctx, app.theme);
+            app.tray = tray::install(cc);
             Ok(Box::new(app))
         }),
     )?;
@@ -300,6 +319,8 @@ impl App {
             return;
         }
         self.stop_scan();
+        self.restore_rx = None;
+        self.restored = false;
         self.tree = None;
         self.git_rx = None;
         self.git_done = 0;
@@ -361,9 +382,21 @@ impl App {
                 self.cancelled = job.progress.cancelled();
                 self.scan = None;
                 match result {
-                    Some(tree) => self.finish(tree),
+                    Some(tree) => {
+                        self.scanned_at = now();
+                        self.finish(tree);
+                        self.save_cache();
+                    }
                     None => self.message = "That folder could not be read.".into(),
                 }
+            }
+        }
+        if let Some(rx) = &self.restore_rx
+            && let Ok(saved) = rx.try_recv()
+        {
+            self.restore_rx = None;
+            if let Some(saved) = saved {
+                self.restore(saved);
             }
         }
         if let Some(rx) = &self.git_rx {
@@ -409,6 +442,24 @@ impl App {
         self.sort_flat(Tab::Repos);
         self.rows_dirty = true;
         self.refresh_volumes(true);
+    }
+
+    /// Show the scan kept from an earlier run; `start_scan` drops the pending load, so nothing is replaced.
+    fn restore(&mut self, saved: cache::Saved) {
+        self.generation += 1;
+        self.cancelled = saved.partial;
+        self.scanned_at = saved.scanned_at;
+        self.restored = true;
+        self.root_volume = scan::volume_of(&saved.tree.root_path);
+        self.root_path = Some(saved.tree.root_path.clone());
+        self.tab = Tab::Tree;
+        self.finish(saved.tree);
+    }
+
+    fn save_cache(&self) {
+        if let Some(t) = &self.tree {
+            cache::save(cache::encode(t, self.scanned_at, self.cancelled));
+        }
     }
 
     /// The rows of the active tab, in display order: the range for shift-click.
@@ -597,6 +648,9 @@ impl App {
             self.largest.retain(|&i| !gone(i));
             self.repos.retain(|&i| !gone(i));
             self.owners.clear();
+        }
+        if !result.done.is_empty() {
+            self.save_cache();
         }
         self.message = match result.errors.first() {
             None => format!("{label}: done"),
@@ -1172,7 +1226,20 @@ impl eframe::App for App {
         if self.rows_dirty {
             self.rebuild_rows();
         }
-        if self.busy() || self.git_done < self.repos.len() || self.bin_rx.is_some() {
+        let closing = ctx.input(|i| i.viewport().close_requested());
+        if tray::quit_requested() {
+            if !closing {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        } else if closing && self.tray.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            tray::hide_app();
+        }
+        if self.busy()
+            || self.git_done < self.repos.len()
+            || self.bin_rx.is_some()
+            || self.restore_rx.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(150));
         } else if self.tab == Tab::Volumes {
             ctx.request_repaint_after(VOLUME_REFRESH);
@@ -1262,6 +1329,7 @@ impl App {
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
+                        tray::request_quit();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -1442,11 +1510,19 @@ impl App {
                     ui.add(egui::Label::new(egui::RichText::new(current).weak()).truncate());
                 } else if let Some(t) = &self.tree {
                     let r = t.root();
+                    let when = if self.restored {
+                        format!("scanned {}", ago(self.scanned_at, now()))
+                    } else {
+                        format!("scanned in {:.1} s", self.elapsed)
+                    };
                     ui.monospace(format!(
-                        "{} items · {} · scanned in {:.1} s",
+                        "{} items · {} · {when}",
                         count(r.items()),
                         size(r.size(self.size_mode)),
-                        self.elapsed
+                    ))
+                    .on_hover_text(format!(
+                        "Scanned {}. Rescan to bring it up to date.",
+                        absolute(self.scanned_at)
                     ));
                     if self.cancelled {
                         ui.colored_label(

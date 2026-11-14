@@ -21,5 +21,7 @@ most Windows-only mistakes.
 ## Rules
 
 - The scanner never follows symlinks and never writes; the only write is Move to Trash, behind a dialog.
+- The last scan is cached in the user's cache folder (src/cache.rs), never inside the scanned tree. Bump
+  `MAGIC` when the layout changes.
 - Git is read-only: `--no-optional-locks`, `core.fsmonitor=false`, no prompts.
 - Comment only the why. Update README.md when a column, action or script changes.

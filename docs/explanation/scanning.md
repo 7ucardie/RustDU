@@ -9,3 +9,8 @@ to scan protected locations.
 
 Git information comes from the `git` on your PATH with optional locks disabled. If git is unavailable,
 RustDU reads the branch from `.git/HEAD` and leaves the dirty state unknown.
+
+A finished scan is written to the user's cache folder and loaded at the next start, so the window opens
+with the previous result instead of empty. Only what the scan measured is stored; git details are probed
+again on load. Items moved or trashed in RustDU are left out of the saved copy. A file that is damaged or
+from another version is ignored.
