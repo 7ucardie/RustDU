@@ -7,9 +7,14 @@ name: Version
 #   (packaging/next-version.sh) and open or refresh the pull request that bumps to it.
 # Commits that are only docs, ci, chore, build, test or refactor ask for no release; run this workflow by
 # hand with a bump to get a release pull request anyway.
+# The CI run it starts on the release pull request is not listed among that pull request's checks, so its
+# result is put there as a commit status once it finishes.
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
     inputs:
       bump:
@@ -21,20 +26,24 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: version
-  cancel-in-progress: false
+env:
+  BRANCH: release/next
+  STATUS: CI on the release pull request
 
 jobs:
   version:
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
+    concurrency:
+      group: version
+      cancel-in-progress: false
     permissions:
       contents: write # the tag and the release branch
       pull-requests: write # the release pull request
       actions: write # starting Release, and CI on the release branch
+      statuses: write # marking that CI run as pending on the pull request
     env:
       GH_TOKEN: ${{ github.token }}
-      BRANCH: release/next
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,4 +111,33 @@ jobs:
           # A pull request opened with the workflow token starts no workflow either: run CI on its commit,
           # which shows up in the pull request's checks.
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$(git rev-parse HEAD)" -f state=pending \
+            -f context="$STATUS" -f description="Started by the Version workflow" >/dev/null
           echo "Release pull request for v$version is up to date." >> "$GITHUB_STEP_SUMMARY"
+
+  status:
+    # Only the run the job above started: by hand (workflow_dispatch), on the release branch of this repository.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'release/next' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report the CI result on the release pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          case "$CONCLUSION" in
+            success) state=success ;;
+            cancelled) state=error ;; # usually replaced by a newer run, which reports for its own commit
+            *) state=failure ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" -f context="$STATUS" \
+            -f description="CI: $CONCLUSION" -f target_url="$RUN_URL" >/dev/null

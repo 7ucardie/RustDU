@@ -22,7 +22,9 @@ reads the commits since the last tag and picks the bump.
 
 It opens a pull request `chore: release <version>` from the branch `release/next`, holding only the new
 version in `Cargo.toml` and `Cargo.lock` and listing the changes. The pull request is rebuilt each time
-`main` changes, so the version and the list stay current, and CI runs on it. Merge it when you want the
+`main` changes, so the version and the list stay current. CI runs on it and reports as the status
+**CI on the release pull request**; GitHub's own run for a bot's pull request waits for **Approve and run**,
+which you can ignore. Merge it when you want the
 release: the Version workflow sees a version without a tag, tags the merge `v<version>` and starts the
 Release workflow, which names every artifact after the tag.
 
