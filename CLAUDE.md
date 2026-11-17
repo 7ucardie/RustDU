@@ -1,7 +1,7 @@
 # RustDU
 
 Where the disk space goes: Rust (edition 2024), egui/eframe, same stack and packaging as
-[hangar](https://github.com/evandervecht/hangar). Windows and macOS; Linux builds.
+[hangar](https://github.com/evandervecht/hangar). Windows, macOS and Linux.
 
 ## Checks
 

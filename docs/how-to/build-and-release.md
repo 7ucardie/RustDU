@@ -38,7 +38,8 @@ a pre-release (`v1.0.0-rc.1`).
 The repository setting **Actions › General › Allow GitHub Actions to create and approve pull requests**
 must be on, or the workflow cannot open the pull request.
 
-GitHub Actions builds Windows and macOS release artifacts for the tag. macOS signing
+GitHub Actions builds Windows, macOS and Linux release artifacts for the tag (Linux: a `.deb` and a
+tarball for amd64 and arm64). macOS signing
 and notarization use the secrets listed in [the release workflow](../../.github/workflows/release.yml).
 Without them the release still goes out: the macOS bundles are signed ad hoc, the release notes say so, and
 users allow the app once under System Settings › Privacy & Security › Open Anyway.

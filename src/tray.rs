@@ -1,6 +1,6 @@
 //! Icon in the macOS menu bar and the Windows notification area. With it, closing the window hides
 //! the app instead of quitting, so the scan stays in memory; the icon brings the window back or
-//! quits. On Linux this does nothing.
+//! quits. Linux has no tray icon: closing the window quits.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
