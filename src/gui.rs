@@ -274,6 +274,8 @@ pub fn run(start: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
             .with_title("RustDU")
             .with_inner_size([1500.0, 900.0])
             .with_min_inner_size([900.0, 500.0])
+            // Linux matches the window to rustdu.desktop by this, for the icon and name in the dock.
+            .with_app_id("rustdu")
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../assets/disk-explorer.png"))
                     .expect("bundled icon is a valid png"),
@@ -2292,7 +2294,7 @@ impl App {
 
                     section(ui, "Actions");
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Reveal").on_hover_text("Show in Finder / Explorer").clicked() {
+                        if ui.button("Reveal").on_hover_text("Show in the file manager").clicked() {
                             action = Some(Action::Reveal(idx));
                         }
                         if ui.button(if multi { "Copy paths" } else { "Copy path" }).clicked() {
@@ -2856,7 +2858,7 @@ pub fn absolute(secs: i64) -> String {
         .map_or_else(|| "—".into(), |d| d.format("%Y-%m-%d %H:%M").to_string())
 }
 
-/// Select the item in Finder / Explorer, or open its folder elsewhere.
+/// Select the item in Finder, Explorer or the Linux file manager.
 fn reveal(path: &Path) {
     let spawned = if cfg!(target_os = "macos") {
         scan::quiet_cmd("open").arg("-R").arg(path).spawn()
@@ -2865,11 +2867,70 @@ fn reveal(path: &Path) {
             .arg(format!("/select,{}", path.display()))
             .spawn()
     } else {
-        scan::quiet_cmd("xdg-open")
-            .arg(path.parent().unwrap_or(path))
-            .spawn()
+        let (uri, parent) = (file_uri(path), path.parent().unwrap_or(path).to_path_buf());
+        // Waits for the file manager's answer, so not on the UI thread.
+        std::thread::spawn(move || {
+            // Nautilus, Dolphin, Nemo, Thunar and others select the item when asked over D-Bus.
+            let shown = scan::quiet_cmd("dbus-send")
+                .args(["--session", "--print-reply", "--reply-timeout=5000"])
+                .args([
+                    "--dest=org.freedesktop.FileManager1",
+                    "/org/freedesktop/FileManager1",
+                ])
+                .arg("org.freedesktop.FileManager1.ShowItems")
+                .args([format!("array:string:{uri}"), "string:".into()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !shown {
+                let _ = scan::quiet_cmd("xdg-open").arg(parent).spawn();
+            }
+        });
+        return;
     };
     let _ = spawned;
+}
+
+/// `file://` URI of a path. Everything outside the unreserved set is escaped, the comma too:
+/// dbus-send splits its array argument on commas.
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for &b in path.as_os_str().as_encoded_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
+}
+
+/// Terminals to try on Linux, in order: the user's choice, the desktop's default, then common ones.
+/// All of them start in the working directory they are spawned with.
+fn linux_terminals(preferred: Option<String>) -> Vec<String> {
+    const KNOWN: &[&str] = &[
+        "xdg-terminal-exec",
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "ptyxis",
+        "kgx",
+        "konsole",
+        "xfce4-terminal",
+        "mate-terminal",
+        "lxterminal",
+        "tilix",
+        "alacritty",
+        "kitty",
+        "foot",
+        "wezterm",
+        "xterm",
+    ];
+    preferred
+        .filter(|t| !t.trim().is_empty())
+        .into_iter()
+        .chain(KNOWN.iter().map(|t| t.to_string()))
+        .collect()
 }
 
 fn open_terminal(dir: &Path) {
@@ -2884,9 +2945,22 @@ fn open_terminal(dir: &Path) {
             .arg(dir)
             .spawn()
     } else {
-        scan::quiet_cmd("x-terminal-emulator")
-            .current_dir(dir)
-            .spawn()
+        // $TERMINAL may carry arguments ("kitty --single-instance").
+        for terminal in linux_terminals(std::env::var("TERMINAL").ok()) {
+            let mut words = terminal.split_whitespace();
+            let Some(program) = words.next() else {
+                continue;
+            };
+            if scan::quiet_cmd(program)
+                .args(words)
+                .current_dir(dir)
+                .spawn()
+                .is_ok()
+            {
+                break;
+            }
+        }
+        return;
     };
     let _ = spawned;
 }
@@ -2894,6 +2968,30 @@ fn open_terminal(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_uri_escapes_what_a_uri_or_dbus_send_would_misread() {
+        assert_eq!(
+            file_uri(Path::new("/home/me/a-b_c.txt")),
+            "file:///home/me/a-b_c.txt"
+        );
+        assert_eq!(
+            file_uri(Path::new("/tmp/my file, 100%#é")),
+            "file:///tmp/my%20file%2C%20100%25%23%C3%A9"
+        );
+    }
+
+    #[test]
+    fn linux_terminals_start_with_the_users_choice() {
+        let t = linux_terminals(Some("kitty --single-instance".into()));
+        assert_eq!(t[0], "kitty --single-instance");
+        assert_eq!(t[1], "xdg-terminal-exec");
+        assert_eq!(linux_terminals(Some("  ".into()))[0], "xdg-terminal-exec");
+        assert_eq!(
+            linux_terminals(None).last().map(String::as_str),
+            Some("xterm")
+        );
+    }
 
     #[test]
     fn sizes_use_decimal_units() {

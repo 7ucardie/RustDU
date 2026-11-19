@@ -67,6 +67,25 @@ jobs:
           name: rustdu-macos-arm64
           path: target/rustdu-macos.tar.gz
           if-no-files-found: error
+      - name: Packages build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y imagemagick desktop-file-utils
+          cargo build --release --locked
+          v="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          sh packaging/linux-package.sh target/release/rustdu "$v" amd64 target/package
+          # The package must install with its dependencies and leave a binary that starts loading.
+          sudo apt-get install -y "./target/package/rustdu-$v-linux-amd64.deb"
+          desktop-file-validate /usr/share/applications/rustdu.desktop
+          if ldd /usr/bin/rustdu | grep "not found"; then exit 1; fi
+      - name: Save Linux artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rustdu-linux-amd64
+          path: target/package/*
+          if-no-files-found: error
 
   # Pin scanner images by digest so their tags cannot change what CI runs.
   security:

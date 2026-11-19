@@ -32,10 +32,11 @@
   <img alt="egui 0.37" src="https://img.shields.io/badge/egui-0.37-FF5722.svg?style=for-the-badge">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0078D6.svg?style=for-the-badge">
   <img alt="macOS arm64 and x64" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-000000.svg?logo=apple&logoColor=white&style=for-the-badge">
+  <img alt="Linux x64 and arm64" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-FCC624.svg?logo=linux&logoColor=black&style=for-the-badge">
 </p>
 
 See where the disk space goes. Scan a folder and get an explorer view of its subfolders with sizes,
-permissions, owners, git state and last activity. Rust and egui, for macOS and Windows (Linux builds).
+permissions, owners, git state and last activity. Rust and egui, for macOS, Windows and Linux.
 
 ![RustDU](assets/screenshot.png)
 
@@ -90,6 +91,11 @@ date. Starting with a folder argument scans that folder instead.
 **Menu bar and tray**: RustDU puts an icon in the macOS menu bar and the Windows notification area.
 Closing the window hides the app and keeps the scan in memory; the icon's menu shows the window again or
 quits, and on Windows a left click on the icon shows it too. File › Quit (and ⌘Q on macOS) quit as usual.
+On Linux there is no tray icon: closing the window quits.
+
+**Linux**: Reveal asks the file manager to select the item (over D-Bus, as Nautilus, Dolphin, Nemo and
+Thunar support) and otherwise opens its folder. Open terminal starts `$TERMINAL` if set, else the desktop's
+default terminal. Choosing a folder uses the desktop portal (`xdg-desktop-portal`).
 
 When scanning a whole volume, mount points of other volumes and pseudo filesystems (`/System/Volumes`,
 `/Volumes`, `/dev` on macOS; `/proc`, `/sys`, `/dev`, `/run` on Linux) are listed but not walked, so the
@@ -118,8 +124,9 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-Successful CI runs also store downloadable Windows x64 binaries and installer, and an ad-hoc signed
-macOS Apple Silicon app, under the workflow run's Artifacts. These builds are not notarized.
+Successful CI runs also store downloadable Windows x64 binaries and installer, an ad-hoc signed
+macOS Apple Silicon app, and the Linux x64 tarball and `.deb`, under the workflow run's Artifacts. These
+builds are not notarized.
 
 ## Package and sign
 
@@ -135,6 +142,19 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" sh packaging/macos-
 **Windows**: `cargo build --release` gives `target\release\rustdu.exe` with the icon embedded.
 `packaging\windows-installer.ps1` builds a per-user Inno Setup installer. Sign either with `signtool`.
 
+**Linux**: `packaging/linux-package.sh` makes a `.deb` and a tarball laid out like an install prefix
+(`bin/rustdu`, the desktop entry and the icon under `share/`). It needs `dpkg-deb` and ImageMagick.
+
+```sh
+cargo build --release
+sh packaging/linux-package.sh target/release/rustdu 0.1.0 amd64 out
+sudo apt install ./out/rustdu-0.1.0-linux-amd64.deb                                   # Debian, Ubuntu
+tar -xzf out/rustdu-0.1.0-linux-amd64.tar.gz -C ~/.local --strip-components=1         # anywhere else
+```
+
+Building needs `libxkbcommon-dev` and `libwayland-dev`. RustDU runs on Wayland and X11, with glibc 2.35 or
+newer for the released binaries (Ubuntu 22.04, Debian 12, Fedora 36).
+
 **Release**: merge the release pull request. `.github/workflows/version.yml` keeps one open (branch
 `release/next`) whenever `main` has something to release: it picks the next version from the
 [Conventional Commits](https://www.conventionalcommits.org/) since the last tag
@@ -142,7 +162,7 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" sh packaging/macos-
 one, or a minor one before 1.0) and writes it to `Cargo.toml` and `Cargo.lock`
 (`packaging/set-version.sh`). CI runs on it; merging it tags `v<version>` and starts the release. Other
 commit types propose nothing; run the Version workflow by hand with a bump to get the pull request anyway.
-`.github/workflows/release.yml` builds Windows and macOS (arm64 and
+`.github/workflows/release.yml` builds Windows, macOS and Linux (the last two for arm64 and
 amd64), signs and notarizes the macOS bundles with the `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`,
 `APPLE_TEAM_ID`, `NOTARY_KEY_P8`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` secrets, and publishes a GitHub
 release with checksums and provenance attestations. A tag with a hyphen makes a pre-release.
@@ -154,6 +174,6 @@ src/main.rs        entry point, optional folder argument
 src/scan.rs        tree walk (parallel), sizes, permissions per OS, git probe
 src/gui.rs         window: tree, largest files, git repos, inspector, status bar
 assets/            icon (png for macOS and the window, ico for Windows)
-packaging/         macOS .app script and entitlements, Windows Inno Setup installer
+packaging/         macOS .app script and entitlements, Windows Inno Setup installer, Linux .deb and tarball
 legacy/swift/      the first SwiftUI version, kept for reference
 ```
